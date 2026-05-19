@@ -370,6 +370,11 @@ def cargar_planificacion(file) -> pd.DataFrame:
 
     Normaliza codigo_homologado a string sin sufijos `.0` ni espacios.
     """
+    if hasattr(file, "seek"):
+        try:
+            file.seek(0)
+        except OSError:
+            pass
     df = pd.read_csv(file, dtype={"codigo_homologado": str})
     df["codigo_homologado"] = (
         df["codigo_homologado"]
@@ -384,8 +389,17 @@ def _guardar_planificacion(file, dest: Path | str = PLAN_PATH) -> bytes | None:
     """Guarda copia local del CSV de planificación. Devuelve los bytes."""
     dest = Path(dest)
     if hasattr(file, "read"):
+        if hasattr(file, "seek"):
+            try:
+                file.seek(0)
+            except OSError:
+                pass
         contenido = file.read()
-        file.seek(0)
+        if hasattr(file, "seek"):
+            try:
+                file.seek(0)
+            except OSError:
+                pass
     else:
         contenido = Path(file).read_bytes()
     try:

@@ -100,9 +100,57 @@ with st.sidebar:
     )
     plantilla_actual = obtener_plantilla()
     if plantilla_actual:
-        st.success(f"Plantilla cargada: {plantilla_actual.name}")
+        try:
+            _cub_p, _pre_p, _peso_p = cargar_datos_plantilla(plantilla_actual)
+            _n_prod = len(_cub_p)
+            _mtime = plantilla_actual.stat().st_mtime
+            _fecha = pd.Timestamp(_mtime, unit="s").strftime("%d/%m/%Y %H:%M")
+            st.success(
+                f"Plantilla activa: **{plantilla_actual.name}**  \n"
+                f"{_n_prod} productos · actualizada {_fecha}"
+            )
+            with st.expander("Verificar precios cargados"):
+                _muestras = [
+                    ("4000036", "LIMON AL AGUA 7,8KG"),
+                    ("4000057", "CHOCOLATE SUIZO 7,8KG"),
+                    ("4000050", "SUPER GRIDITO 7,8KG"),
+                    ("4000043", "CHOCOLATE 7,8KG"),
+                    ("4000953", "SELECCION ARGENTINA 7,8KG"),
+                ]
+                _df = pd.DataFrame(
+                    [
+                        {
+                            "Código": c,
+                            "Producto": n,
+                            "Precio": _pre_p.get(c),
+                            "Cubicaje": _cub_p.get(c),
+                            "Peso": _peso_p.get(c),
+                        }
+                        for c, n in _muestras
+                    ]
+                )
+                st.dataframe(
+                    _df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "Precio": st.column_config.NumberColumn(format="$ %.2f"),
+                        "Cubicaje": st.column_config.NumberColumn(format="%.3f"),
+                        "Peso": st.column_config.NumberColumn(format="%.2f"),
+                    },
+                )
+        except Exception as _e:
+            st.success(f"Plantilla cargada: {plantilla_actual.name}")
+            st.caption(f"(no se pudo previsualizar: {_e})")
     else:
         st.warning("No hay plantilla guardada")
+
+    if st.button("🔄 Recargar plantilla del disco", use_container_width=True):
+        st.session_state.pop("plantilla_bytes", None)
+        st.session_state.pop("_plantilla_file_sig", None)
+        st.session_state.pop("_plantilla_mtime", None)
+        st.session_state["calc_version"] = st.session_state.get("calc_version", 0) + 1
+        st.rerun()
 
     nueva_plantilla = st.file_uploader(
         "Actualizar plantilla del carrito (precios, cubicaje, peso)",
@@ -110,21 +158,28 @@ with st.sidebar:
         key="plantilla_upload",
         help="Excel «Modelo de Carrito»; al guardarlo, se actualizan precios y totales del pedido mostrado.",
     )
+    # No usar st.rerun() aquí: con el archivo aún en el uploader, Streamlit puede
+    # encadenar reruns y el botón «Calcular Pedido» no llega a procesarse.
     if nueva_plantilla:
-        raw = nueva_plantilla.read()
-        nueva_plantilla.seek(0)
-        ok, err = validar_plantilla_carrito(raw)
-        if not ok:
-            st.error(err)
-        else:
-            contenido = _guardar_plantilla(nueva_plantilla)
-            if contenido:
-                st.session_state["plantilla_bytes"] = contenido
-                st.session_state["plantilla_version"] = (
-                    st.session_state.get("plantilla_version", 0) + 1
+        sig = (nueva_plantilla.name, nueva_plantilla.size)
+        if st.session_state.get("_plantilla_file_sig") != sig:
+            raw = nueva_plantilla.read()
+            nueva_plantilla.seek(0)
+            ok, err = validar_plantilla_carrito(raw)
+            if not ok:
+                st.error(err)
+            else:
+                contenido = _guardar_plantilla(nueva_plantilla)
+                if contenido:
+                    st.session_state["plantilla_bytes"] = contenido
+                    st.session_state["plantilla_version"] = (
+                        st.session_state.get("plantilla_version", 0) + 1
+                    )
+                st.session_state["_plantilla_file_sig"] = sig
+                st.success(
+                    "Plantilla actualizada (precios y datos del carrito). "
+                    "Podés calcular el pedido cuando quieras."
                 )
-            st.success("Plantilla actualizada (precios y datos del carrito aplicados al pedido).")
-            st.rerun()
 
     st.divider()
     st.subheader("Mapeo de productos")
@@ -189,21 +244,29 @@ with st.sidebar:
         type=["csv"],
         key="plan_upload",
     )
+    # No usar st.rerun() aquí: con el archivo aún en el uploader, Streamlit puede
+    # encadenar reruns y el botón «Calcular Pedido» no llega a procesarse. El
+    # mismo run ya actualiza session_state y el cuerpo principal lee el plan.
     if plan_upload:
-        try:
-            plan_preview = cargar_planificacion(plan_upload)
-            n_semanas = len(obtener_semanas(plan_preview))
-            if n_semanas == 0:
-                st.error("El CSV no tiene columnas `Semana_<n>_<Mes>_<Año>` reconocibles.")
-            else:
-                _guardar_planificacion(plan_upload)
-                st.session_state["plan_df"] = plan_preview
-                st.success(
-                    f"Planificación actualizada: {len(plan_preview)} productos · {n_semanas} semanas."
-                )
-                st.rerun()
-        except Exception as e:
-            st.error(f"No se pudo leer el CSV: {e}")
+        sig = (plan_upload.name, plan_upload.size)
+        if st.session_state.get("_plan_file_sig") != sig:
+            try:
+                plan_preview = cargar_planificacion(plan_upload)
+                n_semanas = len(obtener_semanas(plan_preview))
+                if n_semanas == 0:
+                    st.error(
+                        "El CSV no tiene columnas `Semana_<n>_<Mes>_<Año>` reconocibles."
+                    )
+                else:
+                    _guardar_planificacion(plan_upload)
+                    st.session_state["plan_df"] = plan_preview
+                    st.session_state["_plan_file_sig"] = sig
+                    st.success(
+                        f"Planificación actualizada: {len(plan_preview)} productos · "
+                        f"{n_semanas} semanas. Podés calcular el pedido cuando quieras."
+                    )
+            except Exception as e:
+                st.error(f"No se pudo leer el CSV: {e}")
 
 # ── Área principal ────────────────────────────────────────────────────────────
 
@@ -255,6 +318,25 @@ def _resolver_plantilla() -> Path | BytesIO | None:
         return BytesIO(st.session_state["plantilla_bytes"])
     return None
 
+
+# Detección de cambio de plantilla en disco: si el archivo `carrito_template.xlsx`
+# fue reemplazado externamente (o por una nueva subida), invalidamos TODO lo
+# cacheado en session_state que dependa de la plantilla (`plantilla_bytes`,
+# `pedido_base`, `mapeo_df`, editor) para forzar a recalcular desde cero con
+# precios/cubicaje/peso del disco actual.
+_plantilla_disk = obtener_plantilla()
+_plantilla_mtime = _plantilla_disk.stat().st_mtime if _plantilla_disk else None
+_prev_mtime = st.session_state.get("_plantilla_mtime")
+if _plantilla_mtime != _prev_mtime:
+    if _prev_mtime is not None:
+        for _k in (
+            "plantilla_bytes", "_plantilla_file_sig",
+            "pedido_base", "mapeo_df", "sin_mapeo_df",
+            "pedido_params", "ventas_info",
+        ):
+            st.session_state.pop(_k, None)
+        st.session_state["calc_version"] = st.session_state.get("calc_version", 0) + 1
+    st.session_state["_plantilla_mtime"] = _plantilla_mtime
 
 plantilla_ok = _resolver_plantilla() is not None
 
